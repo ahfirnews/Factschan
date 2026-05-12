@@ -43,8 +43,6 @@ music/
 *.mp3
 *.wav
 
-# Database
-shorts_db.db
 
 # Temporary files
 *.tmp
