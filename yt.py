@@ -848,6 +848,52 @@ def create_video_from_image(image_path: pathlib.Path, duration: int) -> pathlib.
 # AUDIO  (Voiceover + SFX + Background music)
 # ══════════════════════════════════════════════════════════════
 
+def _estimate_word_timings(text: str, total_duration: float) -> list[dict]:
+    """
+    Estimate per-word timestamps evenly across total_duration.
+    Used when Deepgram transcription is unavailable.
+    """
+    words = text.split()
+    if not words:
+        return []
+    step = total_duration / len(words)
+    return [
+        {"word": w, "start": round(i * step, 3), "end": round((i + 1) * step, 3)}
+        for i, w in enumerate(words)
+    ]
+
+
+def _generate_voiceover_gtts(
+    text: str, output_path: pathlib.Path
+) -> tuple[pathlib.Path, list[dict]]:
+    """
+    Fallback TTS using gTTS (Google Text-to-Speech, free, no API key).
+    Returns (audio_path, estimated_word_timings).
+    """
+    try:
+        from gtts import gTTS  # pip install gTTS
+        tts = gTTS(text=text, lang="en", slow=False)
+        tts.save(str(output_path))
+        print(f"    gTTS voiceover saved: {output_path.name}")
+    except ImportError:
+        # Last resort: generate a silent audio track the same length as script
+        print("    gTTS not installed — generating silent audio placeholder")
+        estimated_dur = max(MIN_VIDEO_DURATION, len(text.split()) * 0.4)
+        _ff([
+            "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
+            "-t", str(int(estimated_dur)),
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            str(output_path.resolve()),
+        ], label="silent_audio", timeout=30)
+        print(f"    Silent audio generated ({int(estimated_dur)}s)")
+    except Exception as e:
+        raise RuntimeError(f"gTTS failed: {e}")
+
+    vo_dur = get_duration(str(output_path))
+    print(f"    Voiceover duration: {vo_dur:.1f}s")
+    return output_path, _estimate_word_timings(text, vo_dur)
+
+
 def generate_voiceover(
     text: str,
     output_path: pathlib.Path,
@@ -863,10 +909,8 @@ def generate_voiceover(
     Requires: DEEPGRAM_API_KEY in environment.
     """
     if not DEEPGRAM_API_KEY:
-        raise ValueError(
-            "Missing DEEPGRAM_API_KEY — add it to your .env file. "
-            "Get a free key at https://console.deepgram.com"
-        )
+        print("    [WARNING] DEEPGRAM_API_KEY not set — using gTTS fallback (no word timestamps)")
+        return _generate_voiceover_gtts(text, output_path)
 
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
@@ -875,36 +919,44 @@ def generate_voiceover(
 
     # ── Step 1: TTS synthesis ─────────────────────────────────
     print("    Synthesising narration (Deepgram TTS)...")
-    r = requests.post(
-        "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
-        headers=headers,
-        json={"text": text},
-        timeout=120,
-    )
-    r.raise_for_status()
-    output_path.write_bytes(r.content)
+    try:
+        r = requests.post(
+            "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
+            headers=headers,
+            json={"text": text},
+            timeout=120,
+        )
+        r.raise_for_status()
+        output_path.write_bytes(r.content)
+    except Exception as e:
+        print(f"    Deepgram TTS failed: {e} — falling back to gTTS")
+        return _generate_voiceover_gtts(text, output_path)
+
     vo_dur = get_duration(str(output_path))
     print(f"    Voiceover: {vo_dur:.1f}s")
 
     # ── Step 2: Transcribe to get word timestamps ─────────────
     print("    Extracting word timestamps...")
-    with open(output_path, "rb") as f:
-        tr = requests.post(
-            "https://api.deepgram.com/v1/listen"
-            "?smart_format=true&punctuate=true&model=nova-2",
-            headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-            files={"audio": f},
-            timeout=120,
+    try:
+        with open(output_path, "rb") as f:
+            tr = requests.post(
+                "https://api.deepgram.com/v1/listen"
+                "?smart_format=true&punctuate=true&model=nova-2",
+                headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
+                files={"audio": f},
+                timeout=120,
+            )
+        tr.raise_for_status()
+        data  = tr.json()
+        words = (
+            data["results"]["channels"][0]
+            ["alternatives"][0]["words"]
         )
-    tr.raise_for_status()
-
-    data  = tr.json()
-    words = (
-        data["results"]["channels"][0]
-        ["alternatives"][0]["words"]
-    )
-    print(f"    {len(words)} word timestamps extracted")
-    return output_path, words
+        print(f"    {len(words)} word timestamps extracted")
+        return output_path, words
+    except Exception as e:
+        print(f"    Deepgram transcription failed: {e} — using estimated timestamps")
+        return output_path, _estimate_word_timings(text, get_duration(str(output_path)))
 
 
 def generate_sound_effects(
@@ -1273,7 +1325,14 @@ def create_countdown_video() -> tuple[pathlib.Path, str, str, str]:
     print("\n[6/7] Fetching energetic background music...")
     bgm_path = get_background_music(video_duration)
     if not (bgm_path and bgm_path.exists()):
-        raise ValueError("Background music unavailable — check API keys or ffmpeg")
+        print("    [WARNING] No music source available — generating silent background")
+        bgm_path = MUSIC_DIR / f"silent_bgm_{ts}.mp3"
+        _ff([
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", str(video_duration),
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            str(bgm_path.resolve()),
+        ], label="silent_bgm", timeout=60)
 
     # ── 7. Assemble ───────────────────────────────────────────
     print("\n[7/7] Assembling final video...")
