@@ -366,7 +366,7 @@ def generate_countdown_script() -> tuple[str, str]:
         f"Hook to open with: \"{hook}\"\n\n"
         f"Write the full {n}-item countdown script using the exact structure from your instructions. "
         f"The hook is already written — continue from AMPLIFY. "
-        f"Total script including the hook must be 280-380 characters."
+        f"Total script including the hook must be 320-420 characters. Use full sentences, no abbreviations."
     )
 
     # Try providers in order: Groq (fastest) → Gemini → Claude
@@ -1264,8 +1264,23 @@ def create_countdown_video() -> tuple[pathlib.Path, str, str, str]:
     voiceover_path, word_timings = generate_voiceover(script, voiceover_path)
     vo_dur = get_duration(str(voiceover_path))
 
-    # Clamp video duration to voiceover length + 1s breathing room
-    video_duration = max(MIN_VIDEO_DURATION, min(int(vo_dur) + 1, MAX_VIDEO_DURATION))
+    # If voiceover is too short, pad it with silence to reach minimum
+    if vo_dur < 21:
+        padded_path = AUDIO_DIR / f"vo_padded_{ts}.mp3"
+        pad_seconds = 22 - vo_dur
+        _ff([
+            "-i", str(voiceover_path.resolve()),
+            "-af", f"apad=pad_dur={pad_seconds:.1f}",
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            str(padded_path.resolve()),
+        ], label="pad_voiceover", timeout=60)
+        voiceover_path = padded_path
+        vo_dur = get_duration(str(voiceover_path))
+        print(f"  Voiceover padded to {vo_dur:.1f}s")
+
+    # Clamp video duration to voiceover length + 2s breathing room
+    import math
+    video_duration = max(22, min(math.ceil(vo_dur) + 2, MAX_VIDEO_DURATION))
     print(f"  Duration locked to voiceover: {video_duration}s")
 
     # ── 2. Stock video ────────────────────────────────────────
