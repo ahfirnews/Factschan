@@ -1,0 +1,105 @@
+name: YouTube Shorts Generator & Uploader
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
+    inputs:
+      num_videos:
+        description: 'Number of videos to generate'
+        required: false
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '5'
+          - '10'
+
+env:
+  NUM_VIDEOS: ${{ github.event.inputs.num_videos || '1' }}
+  UPLOAD_TO_YOUTUBE: 'true'
+
+# Required for the "Commit database" step to push back to the repo
+permissions:
+  contents: write
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dotenv google-api-python-client google-auth-oauthlib ollama
+
+      - name: Install and setup Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull qwen2.5-coder:0.5b
+
+      - name: Create output directories
+        run: mkdir -p output audio music
+
+      - name: Generate and upload YouTube Shorts
+        env:
+          YT_CLIENT_ID:      ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET:  ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN:  ${{ secrets.YT_REFRESH_TOKEN }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+          OLLAMA_MODEL:      qwen2.5-coder:0.5b
+          NOVA_API_KEY:      ${{ secrets.NOVA_API_KEY }}
+          NOVA_API_URL:      https://api.nova.amazon.com/v1/chat/completions
+          NOVA_MODEL:        nova-lite-v1
+        run: python yt.py
+
+      - name: Upload generated videos as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-shorts-${{ github.run_number }}
+          path: output/*.mp4
+          retention-days: 7
+
+      - name: Upload database as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-${{ github.run_number }}
+          path: shorts_db.db
+          retention-days: 30
+
+      # Saves used-content database back to repo so duplicates are tracked
+      # across runs. No secrets needed — uses built-in GITHUB_TOKEN.
+      - name: Commit database to repository
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add shorts_db.db
+          git diff --staged --quiet || git commit -m "chore: update shorts database [skip ci]"
+          git push

@@ -1,0 +1,90 @@
+name: 🎬 Daily YouTube Shorts Generator
+
+on:
+  schedule:
+    # Run daily at 2PM EST (19:00 UTC) — peak YouTube upload time
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+    inputs:
+      num_videos:
+        description: "Number of videos to generate"
+        required: false
+        default: "1"
+      upload:
+        description: "Upload to YouTube? (true/false)"
+        required: false
+        default: "true"
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies (ffmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create .env from GitHub Secrets
+        run: |
+          cat > .env << EOF
+          OLLAMA_MODEL=qwen2.5-coder:0.5b
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          NOVA_API_KEY=${{ secrets.NOVA_API_KEY }}
+          ELEVENLABS_API_KEY=${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID=${{ secrets.ELEVENLABS_VOICE_ID }}
+          PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY=${{ secrets.PIXABAY_API_KEY }}
+          JAMENDO_CLIENT_ID=${{ secrets.JAMENDO_CLIENT_ID }}
+          FREESOUND_API_KEY=${{ secrets.FREESOUND_API_KEY }}
+          REPLICATE_API_KEY=${{ secrets.REPLICATE_API_KEY }}
+          YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}
+          YT_CLIENT_ID=${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET=${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN=${{ secrets.YT_REFRESH_TOKEN }}
+          NUM_VIDEOS=${{ github.event.inputs.num_videos || '1' }}
+          UPLOAD_TO_YOUTUBE=${{ github.event.inputs.upload || 'true' }}
+          CAPTION_FONT=Montserrat-ExtraBold
+          DEFAULT_VOICE=en-US-AvaNeural
+          EOF
+
+      - name: Create directories
+        run: mkdir -p output audio music logs
+
+      - name: Generate & Upload Short
+        run: python yt.py 2>&1 | tee logs/run_$(date +%Y%m%d_%H%M%S).log
+
+      - name: Upload output video as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-output-${{ github.run_id }}
+          path: |
+            output/*.mp4
+            logs/*.log
+          retention-days: 7
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: logs/*.log
+          retention-days: 30

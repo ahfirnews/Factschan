@@ -1,0 +1,15 @@
+# Core dependencies
+requests
+python-dotenv
+
+# Text-to-Speech (Edge TTS - FREE)
+edge-tts
+
+# Optional: AWS Polly
+boto3
+
+# Optional: ElevenLabs
+# (No extra package needed - uses requests)
+
+# Video processing (requires ffmpeg installed separately)
+# ffmpeg must be installed on your system
