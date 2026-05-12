@@ -1,12 +1,14 @@
 # Core dependencies
-requests
-python-dotenv
-
-# Text-to-Speech (Edge TTS - FREE)
+google-generativeai
 edge-tts
-
-# Optional: AWS Polly
-boto3
+requests
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+imageio[ffmpeg]
+elevenlabs
+deepgram-sdk
 
 # Optional: ElevenLabs
 # (No extra package needed - uses requests)
