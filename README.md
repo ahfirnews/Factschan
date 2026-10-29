@@ -29,6 +29,8 @@ for last. Subscribe for fast facts, clear sources, and zero dead air.
 
 - Live model discovery: Groq, Cerebras, Mistral, NVIDIA NIM, SambaNova,
   Cloudflare Workers AI, Cohere, Gemini, and Claude.
+- Groq, Gemini, and Claude never use pinned fallback IDs: every run reads the
+  provider's live catalog and skips that route if discovery is unavailable.
 - Managed free routers: OpenRouter Free and Hugging Face Router.
 - Offline reserve: `fact_voltage_prompt_reserve.sqlite3` with 2,304 unique rows.
 - A reserve row is deleted only after YouTube confirms a successful upload.

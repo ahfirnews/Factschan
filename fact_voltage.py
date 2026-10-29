@@ -22,9 +22,7 @@ from media_sources import candidates, download
 from prompt_reserve import RESERVE_PATH, consume, release, reserve, seed, stats
 from youtube_upload import upload_to_youtube
 
-# Reuse the mature FFmpeg caption/audio primitives while the legacy entry point
-# remains available to existing local users.
-import yt as video_tools
+import video_tools
 
 
 DB_PATH = pathlib.Path(os.getenv("SHORTS_DB_PATH", "shorts_db.db"))

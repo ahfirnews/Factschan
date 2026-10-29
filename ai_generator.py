@@ -141,7 +141,9 @@ def _discover_openai_models(name: str, url: str, key: str, preferred: tuple[str,
             return models
     except Exception as error:
         print(f"[AI] {name} catalog unavailable ({type(error).__name__})")
-    return list(preferred)
+    # Never guess an old model ID when a provider catalog is unavailable. The
+    # next provider (or the offline reserve) is safer than an expired model.
+    return []
 
 
 def _openai_provider(
@@ -246,6 +248,32 @@ def _huggingface(prompt: str) -> dict | None:
     )
 
 
+def _gemini_models(payload: dict) -> list[str]:
+    """Return generation-capable Gemini text models, newest aliases first."""
+    blocked = ("aqa", "audio", "computer-use", "embedding", "image", "live", "robotics", "tts")
+    available = []
+    for item in payload.get("models", []):
+        name = str(item.get("name", "")).removeprefix("models/")
+        if (
+            name.startswith("gemini-")
+            and "generateContent" in item.get("supportedGenerationMethods", [])
+            and not any(term in name.casefold() for term in blocked)
+        ):
+            available.append(name)
+
+    def rank(name: str) -> tuple:
+        versions = tuple(int(value) for value in re.findall(r"\d+", name))
+        return (
+            "latest" in name,
+            "flash" in name,
+            "preview" not in name and "exp" not in name,
+            versions,
+            name,
+        )
+
+    return sorted(set(available), key=rank, reverse=True)[:12]
+
+
 def _gemini(prompt: str) -> dict | None:
     key = _env("GEMINI_API_KEY")
     if not key:
@@ -257,13 +285,13 @@ def _gemini(prompt: str) -> dict | None:
             timeout=(8, 20),
         )
         catalog.raise_for_status()
-        models = [
-            item.get("name", "").removeprefix("models/")
-            for item in catalog.json().get("models", [])
-            if "generateContent" in item.get("supportedGenerationMethods", [])
-            and "flash" in item.get("name", "").casefold()
-        ]
-        for model in models[:10]:
+        models = _gemini_models(catalog.json())
+        print(f"[AI] Gemini: discovered {len(models)} current text models")
+    except Exception as error:
+        print(f"[AI] Gemini catalog unavailable ({type(error).__name__})")
+        return None
+    for model in models:
+        try:
             response = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 params={"key": key},
@@ -281,9 +309,19 @@ def _gemini(prompt: str) -> dict | None:
             data = _parse_json(response.json()["candidates"][0]["content"]["parts"][0]["text"])
             data["source"] = f"Gemini:{model}"
             return validate_package(data)
-    except Exception:
-        return None
+        except Exception:
+            continue
     return None
+
+
+def _claude_models(payload: dict) -> list[str]:
+    """Sort the live Anthropic catalog by creation time without pinned IDs."""
+    items = [
+        item for item in payload.get("data", [])
+        if str(item.get("id", "")).startswith("claude-")
+    ]
+    items.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))), reverse=True)
+    return [str(item["id"]) for item in items[:12]]
 
 
 def _claude(prompt: str) -> dict | None:
@@ -294,8 +332,13 @@ def _claude(prompt: str) -> dict | None:
     try:
         catalog = requests.get("https://api.anthropic.com/v1/models", headers=headers, params={"limit": 1000}, timeout=(8, 20))
         catalog.raise_for_status()
-        models = [item.get("id", "") for item in catalog.json().get("data", []) if item.get("id")]
-        for model in models[:10]:
+        models = _claude_models(catalog.json())
+        print(f"[AI] Claude: discovered {len(models)} current text models")
+    except Exception as error:
+        print(f"[AI] Claude catalog unavailable ({type(error).__name__})")
+        return None
+    for model in models:
+        try:
             response = requests.post(
                 "https://api.anthropic.com/v1/messages",
                 headers=headers,
@@ -310,8 +353,8 @@ def _claude(prompt: str) -> dict | None:
             data = _parse_json(response.json()["content"][0]["text"])
             data["source"] = f"Claude:{model}"
             return validate_package(data)
-    except Exception:
-        return None
+        except Exception:
+            continue
     return None
 
 
@@ -469,7 +512,7 @@ def _cohere(prompt: str) -> dict | None:
 
 
 GENERIC_PROVIDERS = (
-    ("Groq", "https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai/v1/models", "GROQ_API_KEY", ("openai/gpt-oss-20b",)),
+    ("Groq", "https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai/v1/models", "GROQ_API_KEY", ()),
     ("Cerebras", "https://api.cerebras.ai/v1/chat/completions", "https://api.cerebras.ai/v1/models", "CEREBRAS_API_KEY", ("llama3.1-8b",)),
     ("Mistral", "https://api.mistral.ai/v1/chat/completions", "https://api.mistral.ai/v1/models", "MISTRAL_API_KEY", ("mistral-small-latest",)),
     ("NVIDIA NIM", "https://integrate.api.nvidia.com/v1/chat/completions", "https://integrate.api.nvidia.com/v1/models", "NVIDIA_API_KEY", ("meta/llama-3.3-70b-instruct",)),
@@ -551,10 +594,9 @@ def catalog_health() -> dict[str, str]:
             response.raise_for_status()
             payload = response.json()
             if name == "Gemini":
-                count = sum(
-                    "generateContent" in item.get("supportedGenerationMethods", [])
-                    for item in payload.get("models", [])
-                )
+                count = len(_gemini_models(payload))
+            elif name == "Claude":
+                count = len(_claude_models(payload))
             elif isinstance(payload, list):
                 count = len(payload)
             else:

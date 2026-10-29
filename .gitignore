@@ -3,6 +3,7 @@
 client_secrets.json
 token.json
 oauth*.json
+/git apikey.txt
 .fact_voltage_work/
 fact_voltage_prompt_reserve.sqlite3-shm
 fact_voltage_prompt_reserve.sqlite3-wal

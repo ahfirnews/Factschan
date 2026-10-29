@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube uploader — Countdown / Comparison niche.
-Accepts pre-built title, description and tags from yt.py.
+Accepts pre-built title, description and tags from the Fact Voltage pipeline.
 Required env vars: YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
 """
 import os
@@ -70,8 +70,8 @@ def _build_metadata(
 ) -> dict:
     """
     Build YouTube video metadata.
-    override_* values come from yt.py's build_video_title / build_video_description /
-    build_video_tags.  When absent (CLI use), sensible fallbacks are generated.
+    override_* values come from fact_voltage.py. When absent for direct CLI use,
+    sensible fallbacks are generated.
     """
 
     # ── Title ─────────────────────────────────────────────────
@@ -116,8 +116,8 @@ def _build_metadata(
         },
         # YouTube Shorts detection signals (all three required):
         # 1. #Shorts in the title        ← always present in our titles
-        # 2. Vertical 9:16 aspect ratio  ← enforced by yt.py (1080x1920)
-        # 3. Duration ≤ 60 s             ← enforced by yt.py (21-58 s)
+        # 2. Vertical 9:16 aspect ratio  ← enforced by fact_voltage.py
+        # 3. Duration ≤ 60 s             ← enforced by fact_voltage.py
     }
 
 
@@ -170,9 +170,9 @@ def upload_to_youtube(
     file_path        : Path to the .mp4 file.
     fact             : The script/voiceover text (used for fallback description).
     duration_seconds : Video duration in seconds (auto-detected if None).
-    override_title   : Pre-built viral title from yt.py.
-    override_desc    : Pre-built SEO description from yt.py.
-    override_tags    : Pre-built tag list from yt.py.
+    override_title   : Pre-built title from fact_voltage.py.
+    override_desc    : Pre-built description from fact_voltage.py.
+    override_tags    : Pre-built tags from fact_voltage.py.
 
     Returns
     -------

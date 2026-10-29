@@ -120,6 +120,47 @@ def _wikimedia(query: str) -> list[dict]:
     return output
 
 
+def _wikimedia_images(query: str) -> list[dict]:
+    """Keyless Commons still-image fallback when no usable video exists."""
+    simple = " ".join(query.split()[:4])
+
+    def search(value: str) -> dict:
+        response = SESSION.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query", "format": "json", "generator": "search",
+                "gsrsearch": f"{value} filetype:bitmap", "gsrnamespace": 6, "gsrlimit": 20,
+                "prop": "imageinfo", "iiprop": "url|mime|extmetadata|size", "iiurlwidth": 1600,
+            },
+            timeout=(8, 25),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    payload = search(simple)
+    if not payload.get("query", {}).get("pages"):
+        payload = search(" ".join(query.split()[:2]))
+    output = []
+    for page in payload.get("query", {}).get("pages", {}).values():
+        info = (page.get("imageinfo") or [{}])[0]
+        if info.get("mime") not in {"image/jpeg", "image/png", "image/webp"}:
+            continue
+        url = info.get("thumburl") or info.get("url")
+        if not url:
+            continue
+        meta = info.get("extmetadata", {})
+        artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "Wikimedia contributor"))
+        license_name = meta.get("LicenseShortName", {}).get("value", "Wikimedia Commons license")
+        output.append({
+            "source": "Wikimedia Commons", "id": str(page.get("pageid")), "kind": "image", "url": url,
+            "width": info.get("thumbwidth") or info.get("width"),
+            "height": info.get("thumbheight") or info.get("height"),
+            "attribution": f"{page.get('title', 'Wikimedia image')} — {artist}", "license": license_name,
+            "search_text": page.get("title", ""),
+        })
+    return output
+
+
 def _nasa(query: str) -> list[dict]:
     simple = " ".join(query.split()[:4])
     response = SESSION.get(
@@ -208,7 +249,7 @@ def _art_institute(query: str) -> list[dict]:
     return output
 
 
-SEARCHERS = (_pexels, _pixabay, _wikimedia, _nasa, _openverse, _art_institute)
+SEARCHERS = (_pexels, _pixabay, _wikimedia, _nasa, _openverse, _wikimedia_images, _art_institute)
 
 
 def _relevance(query: str, item: dict) -> int:

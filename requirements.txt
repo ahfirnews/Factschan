@@ -1,7 +1,5 @@
 # Runtime dependencies. FFmpeg is installed separately by GitHub Actions.
 edge-tts>=7.2,<8
 requests>=2.32,<3
-python-dotenv>=1.0,<2
 google-auth>=2.40,<3
-google-auth-oauthlib>=1.2,<2
 google-api-python-client>=2.180,<3
