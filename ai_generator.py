@@ -62,6 +62,13 @@ def _env(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
+def _safe_error(error: Exception) -> str:
+    """Return diagnostic type/status without ever exposing response bodies."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return f"HTTP {status}" if status else type(error).__name__
+
+
 def _parse_json(text: str) -> dict:
     cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     match = re.search(r"\{.*\}", cleaned, re.S)
@@ -567,7 +574,7 @@ def catalog_health() -> dict[str, str]:
             models = _text_models(payload if isinstance(payload, list) else payload.get("data", []), preferred)
             result[name] = f"ok ({len(models)} candidates)" if models else "catalog empty"
         except Exception as error:
-            result[name] = f"error ({type(error).__name__})"
+            result[name] = f"error ({_safe_error(error)})"
     checks = (
         ("OpenRouter Free", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/models", "bearer"),
         ("Hugging Face Router", "HF_TOKEN", "https://huggingface.co/api/models?pipeline_tag=text-generation&inference=warm&limit=5", "bearer"),
@@ -603,7 +610,7 @@ def catalog_health() -> dict[str, str]:
                 count = len(payload.get("data", []))
             result[name] = f"ok ({count} candidates)" if count else "catalog empty"
         except Exception as error:
-            result[name] = f"error ({type(error).__name__})"
+            result[name] = f"error ({_safe_error(error)})"
     account_id = _env("CLOUDFLARE_ACCOUNT_ID")
     cloudflare_key = _env("CLOUDFLARE_API_TOKEN")
     if not account_id or not cloudflare_key:
@@ -613,7 +620,7 @@ def catalog_health() -> dict[str, str]:
             models = _cloudflare_models(account_id, cloudflare_key)
             result["Cloudflare Workers AI"] = f"ok ({len(models)} candidates)" if models else "catalog empty"
         except Exception as error:
-            result["Cloudflare Workers AI"] = f"error ({type(error).__name__})"
+            result["Cloudflare Workers AI"] = f"error ({_safe_error(error)})"
     cohere_key = _env("COHERE_API_KEY")
     if not cohere_key:
         result["Cohere"] = "not configured"
@@ -622,5 +629,5 @@ def catalog_health() -> dict[str, str]:
             models = _cohere_models(cohere_key)
             result["Cohere"] = f"ok ({len(models)} candidates)" if models else "catalog empty"
         except Exception as error:
-            result["Cohere"] = f"error ({type(error).__name__})"
+            result["Cohere"] = f"error ({_safe_error(error)})"
     return result
