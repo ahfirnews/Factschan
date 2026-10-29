@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import os
 import pathlib
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from ai_generator import validate_package
 
 
-RESERVE_PATH = pathlib.Path("fact_voltage_prompt_reserve.sqlite3")
+RESERVE_PATH = pathlib.Path(os.getenv("PROMPT_RESERVE_PATH", "fact_voltage_prompt_reserve.sqlite3"))
 RESERVE_SIZE = 2304
 
 # Carefully worded evergreen facts. Each generated row combines three different

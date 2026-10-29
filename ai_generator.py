@@ -315,11 +315,165 @@ def _claude(prompt: str) -> dict | None:
     return None
 
 
+def _cloudflare_models(account_id: str, key: str) -> list[str]:
+    """Discover current Workers AI text models instead of pinning expiring IDs."""
+    preferred = (
+        "@cf/zai-org/glm-4.7-flash",
+        "@cf/google/gemma-4-26b-a4b-it",
+        "@cf/nvidia/nemotron-3-120b-a12b",
+        "@cf/meta/llama-3.1-8b-instruct",
+    )
+    response = requests.get(
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search",
+        headers={"Authorization": f"Bearer {key}"},
+        params={
+            "task": "Text Generation",
+            "hide_experimental": "true",
+            "include_deprecated": "false",
+            "per_page": 100,
+        },
+        timeout=(8, 20),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    items = payload.get("result", payload.get("data", []))
+    if isinstance(items, dict):
+        items = items.get("data", [])
+    blocked = ("audio", "embed", "guard", "image", "moderation", "rerank", "speech", "tts", "video", "whisper")
+    available = [
+        str(item.get("name", ""))
+        for item in items if isinstance(item, dict)
+        and str(item.get("name", "")).startswith("@cf/")
+        and not item.get("deprecated", False)
+        and not any(term in str(item.get("name", "")).casefold() for term in blocked)
+    ]
+    ordered = [model for model in preferred if model in available]
+    ordered.extend(model for model in available if model not in ordered)
+    return ordered[:12]
+
+
+def _cloudflare(prompt: str) -> dict | None:
+    account_id = _env("CLOUDFLARE_ACCOUNT_ID")
+    key = _env("CLOUDFLARE_API_TOKEN")
+    if not account_id or not key:
+        return None
+    try:
+        models = _cloudflare_models(account_id, key)
+        if not models:
+            return None
+        print(f"[AI] Cloudflare Workers AI: discovered {len(models)} active text models")
+    except Exception as error:
+        print(f"[AI] Cloudflare Workers AI catalog unavailable ({type(error).__name__})")
+        return None
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "cf-aig-gateway-id": _env("CLOUDFLARE_AI_GATEWAY_ID") or "default",
+    }
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
+    for model in models:
+        for json_mode in (True, False):
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.85,
+                "max_tokens": 700,
+            }
+            if json_mode:
+                body["response_format"] = {"type": "json_object"}
+            try:
+                response = requests.post(url, headers=headers, json=body, timeout=(8, 35))
+                if response.status_code == 429:
+                    return None
+                if response.status_code in (400, 404, 422) and json_mode:
+                    continue
+                response.raise_for_status()
+                data = _parse_json(response.json()["choices"][0]["message"]["content"])
+                data["source"] = f"Cloudflare Workers AI:{model}"
+                return validate_package(data)
+            except Exception:
+                continue
+    return None
+
+
+def _cohere_models(key: str) -> list[str]:
+    response = requests.get(
+        "https://api.cohere.com/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+        params={"endpoint": "chat", "page_size": 1000},
+        timeout=(8, 20),
+    )
+    response.raise_for_status()
+    items = response.json().get("models", [])
+    available = [
+        str(item.get("name", ""))
+        for item in items
+        if item.get("name")
+        and not item.get("is_deprecated", False)
+        and "chat" in item.get("endpoints", [])
+    ]
+    preferred = ("command-a-plus-05-2026", "command-a-03-2025", "tiny-aya-global")
+    ordered = [model for model in preferred if model in available]
+    ordered.extend(model for model in available if model not in ordered)
+    return ordered[:12]
+
+
+def _cohere(prompt: str) -> dict | None:
+    key = _env("COHERE_API_KEY")
+    if not key:
+        return None
+    try:
+        models = _cohere_models(key)
+        if not models:
+            return None
+        print(f"[AI] Cohere: discovered {len(models)} active chat models")
+    except Exception as error:
+        print(f"[AI] Cohere catalog unavailable ({type(error).__name__})")
+        return None
+    for model in models:
+        for json_mode in (True, False):
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.85,
+                "max_tokens": 700,
+            }
+            if json_mode:
+                body["response_format"] = {"type": "json_object"}
+            try:
+                response = requests.post(
+                    "https://api.cohere.com/v2/chat",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json=body,
+                    timeout=(8, 35),
+                )
+                if response.status_code == 429:
+                    return None
+                if response.status_code in (400, 404, 422) and json_mode:
+                    continue
+                response.raise_for_status()
+                blocks = response.json()["message"]["content"]
+                text = "\n".join(block.get("text", "") for block in blocks if block.get("type") == "text")
+                data = _parse_json(text)
+                data["source"] = f"Cohere:{model}"
+                return validate_package(data)
+            except Exception:
+                continue
+    return None
+
+
 GENERIC_PROVIDERS = (
     ("Groq", "https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai/v1/models", "GROQ_API_KEY", ("openai/gpt-oss-20b",)),
     ("Cerebras", "https://api.cerebras.ai/v1/chat/completions", "https://api.cerebras.ai/v1/models", "CEREBRAS_API_KEY", ("llama3.1-8b",)),
     ("Mistral", "https://api.mistral.ai/v1/chat/completions", "https://api.mistral.ai/v1/models", "MISTRAL_API_KEY", ("mistral-small-latest",)),
     ("NVIDIA NIM", "https://integrate.api.nvidia.com/v1/chat/completions", "https://integrate.api.nvidia.com/v1/models", "NVIDIA_API_KEY", ("meta/llama-3.3-70b-instruct",)),
+    ("SambaNova", "https://api.sambanova.ai/v1/chat/completions", "https://api.sambanova.ai/v1/models", "SAMBANOVA_API_KEY", ()),
 )
 
 
@@ -335,7 +489,7 @@ def generate_package(reject_candidate: Callable[[dict], bool] | None = None) -> 
         lambda value, item=item: _openai_provider(*item, value)
         for item in GENERIC_PROVIDERS
     ]
-    callers.extend((_openrouter, _huggingface, _gemini, _claude))
+    callers.extend((_cloudflare, _cohere, _openrouter, _huggingface, _gemini, _claude))
     for caller in callers:
         package = caller(prompt)
         if package is None:
@@ -350,7 +504,8 @@ def generate_package(reject_candidate: Callable[[dict], bool] | None = None) -> 
 
 def configured_provider_count() -> int:
     generic = sum(bool(_env(item[3])) for item in GENERIC_PROVIDERS)
-    routed = sum(bool(_env(name)) for name in ("OPENROUTER_API_KEY", "HF_TOKEN", "GEMINI_API_KEY"))
+    routed = sum(bool(_env(name)) for name in ("OPENROUTER_API_KEY", "HF_TOKEN", "GEMINI_API_KEY", "COHERE_API_KEY"))
+    routed += bool(_env("CLOUDFLARE_ACCOUNT_ID") and _env("CLOUDFLARE_API_TOKEN"))
     return generic + routed + bool(_env("ANTHROPIC_API_KEY") or _env("CLAUDE_API_KEY"))
 
 
@@ -407,4 +562,23 @@ def catalog_health() -> dict[str, str]:
             result[name] = f"ok ({count} candidates)" if count else "catalog empty"
         except Exception as error:
             result[name] = f"error ({type(error).__name__})"
+    account_id = _env("CLOUDFLARE_ACCOUNT_ID")
+    cloudflare_key = _env("CLOUDFLARE_API_TOKEN")
+    if not account_id or not cloudflare_key:
+        result["Cloudflare Workers AI"] = "not configured"
+    else:
+        try:
+            models = _cloudflare_models(account_id, cloudflare_key)
+            result["Cloudflare Workers AI"] = f"ok ({len(models)} candidates)" if models else "catalog empty"
+        except Exception as error:
+            result["Cloudflare Workers AI"] = f"error ({type(error).__name__})"
+    cohere_key = _env("COHERE_API_KEY")
+    if not cohere_key:
+        result["Cohere"] = "not configured"
+    else:
+        try:
+            models = _cohere_models(cohere_key)
+            result["Cohere"] = f"ok ({len(models)} candidates)" if models else "catalog empty"
+        except Exception as error:
+            result["Cohere"] = f"error ({type(error).__name__})"
     return result

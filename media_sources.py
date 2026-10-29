@@ -46,6 +46,7 @@ def _pexels(query: str) -> list[dict]:
         if files:
             output.append({
                 "source": "Pexels", "id": str(video["id"]), "kind": "video", "url": files[0]["link"],
+                "width": files[0].get("width"), "height": files[0].get("height"),
                 "attribution": f"Pexels video by {video.get('user', {}).get('name', 'contributor')}",
                 "license": "Pexels License",
             })
@@ -69,6 +70,7 @@ def _pixabay(query: str) -> list[dict]:
         if variant and variant.get("url"):
             output.append({
                 "source": "Pixabay", "id": str(video["id"]), "kind": "video", "url": variant["url"],
+                "width": variant.get("width"), "height": variant.get("height"),
                 "attribution": f"Pixabay video by {video.get('user', 'contributor')}",
                 "license": "Pixabay Content License",
             })
@@ -110,6 +112,8 @@ def _wikimedia(query: str) -> list[dict]:
         license_name = meta.get("LicenseShortName", {}).get("value", "Wikimedia Commons license")
         output.append({
             "source": "Wikimedia Commons", "id": str(page.get("pageid")), "kind": "video", "url": url,
+            "width": derivatives[0].get("width") if derivatives else info.get("width"),
+            "height": derivatives[0].get("height") if derivatives else info.get("height"),
             "attribution": f"{page.get('title', 'Wikimedia video')} — {artist}", "license": license_name,
             "search_text": page.get("title", ""),
         })
@@ -169,6 +173,7 @@ def _openverse(query: str) -> list[dict]:
         if url:
             output.append({
                 "source": "Openverse", "id": str(item.get("id")), "kind": "image", "url": url,
+                "width": item.get("width"), "height": item.get("height"),
                 "attribution": f"{item.get('title') or 'Openverse image'} — {item.get('creator') or 'unknown creator'}",
                 "license": str(item.get("license") or "Creative Commons").upper(),
                 "search_text": item.get("title") or "",
@@ -236,7 +241,14 @@ def candidates(query: str) -> list[dict]:
         ranked.append(item)
     return sorted(
         ranked,
-        key=lambda item: (0 if item["kind"] == "video" else 1, -item["relevance"], priority.get(item["source"], 9)),
+        key=lambda item: (
+            0 if item["kind"] == "video" else 1,
+            -item["relevance"],
+            abs(
+                (float(item.get("width") or 0) / max(float(item.get("height") or 0), 1.0)) - 0.5625
+            ) if item.get("width") and item.get("height") else 2.0,
+            priority.get(item["source"], 9),
+        ),
     )
 
 

@@ -4,7 +4,7 @@
 
 Fact Voltage is an automated YouTube Shorts pipeline for cinematic, three-beat
 fact countdowns. It discovers currently available text models at runtime, tries
-eight provider routes, and falls back to a transactional SQLite reserve with
+eleven provider routes, and falls back to a transactional SQLite reserve with
 2,304 unique ready-to-render episodes.
 
 ## Channel identity
@@ -27,7 +27,8 @@ for last. Subscribe for fast facts, clear sources, and zero dead air.
 
 ## Reliability design
 
-- Live model discovery: Groq, Cerebras, Mistral, NVIDIA NIM, Gemini, and Claude.
+- Live model discovery: Groq, Cerebras, Mistral, NVIDIA NIM, SambaNova,
+  Cloudflare Workers AI, Cohere, Gemini, and Claude.
 - Managed free routers: OpenRouter Free and Hugging Face Router.
 - Offline reserve: `fact_voltage_prompt_reserve.sqlite3` with 2,304 unique rows.
 - A reserve row is deleted only after YouTube confirms a successful upload.
@@ -56,7 +57,14 @@ never change.
 5. Run a safe local preview with:
 
    ```bash
-   UPLOAD_TO_YOUTUBE=false NUM_VIDEOS=1 python fact_voltage.py
+   preview_dir="$(mktemp -d)"
+   cp shorts_db.db "$preview_dir/shorts.db"
+   cp fact_voltage_prompt_reserve.sqlite3 "$preview_dir/reserve.sqlite3"
+   UPLOAD_TO_YOUTUBE=false NUM_VIDEOS=1 \
+     SHORTS_DB_PATH="$preview_dir/shorts.db" \
+     PROMPT_RESERVE_PATH="$preview_dir/reserve.sqlite3" \
+     OUTPUT_DIR=output/local-preview WORK_DIR="$preview_dir/work" \
+     python fact_voltage.py
    ```
 
 The preview does not consume uniqueness history or delete a reserve row.
