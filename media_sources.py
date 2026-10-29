@@ -16,8 +16,9 @@ SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "FactVoltageBot/1.0 (automated educational video creator)"})
 
 GENERIC_QUERY_WORDS = {
-    "animation", "aerial", "cinematic", "close", "footage", "framing", "macro",
-    "motion", "scientific", "setting", "shot", "slow", "technology", "video", "view",
+    "ancient", "animation", "aerial", "cinematic", "close", "footage", "framing",
+    "giant", "great", "human", "large", "macro", "motion", "planet", "scientific",
+    "setting", "shot", "slow", "technology", "video", "view",
 }
 
 QUALITY_PRIORITY = {"4K": 0, "1080p": 1, "720p": 2}
@@ -299,19 +300,34 @@ def _art_institute(query: str) -> list[dict]:
 SEARCHERS = (_pexels, _pixabay, _wikimedia, _nasa, _openverse, _wikimedia_images, _art_institute)
 
 
-def _relevance(query: str, item: dict) -> int:
-    aliases = {"fibre": "fiber", "colour": "color"}
+SEARCH_ALIASES = {"fibre": "fiber", "colour": "color"}
 
-    def normalized(value: str) -> str:
-        tokens = re.findall(r"[a-z0-9]+", value.casefold())
-        return " ".join(aliases.get(token, token) for token in tokens)
 
-    text = normalized(str(item.get("search_text") or item.get("attribution", "")))
-    terms = [
-        term for term in normalized(query).split()
-        if len(term) >= 4 and term not in GENERIC_QUERY_WORDS
+def _normalized_search(value: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", value.casefold())
+    return " ".join(SEARCH_ALIASES.get(token, token) for token in tokens)
+
+
+def _query_terms(query: str) -> list[str]:
+    return [
+        term for term in _normalized_search(query).split()
+        if (len(term) >= 4 or term in {"gps", "qr"}) and term not in GENERIC_QUERY_WORDS
     ]
+
+
+def _relevance(query: str, item: dict) -> int:
+    text = _normalized_search(str(item.get("search_text") or item.get("attribution", "")))
+    terms = _query_terms(query)
     return sum(1 for term in terms[:5] if term[:5] in text)
+
+
+def _subject_matches(query: str, item: dict) -> bool:
+    """Require the query's lead subject, not just a secondary keyword."""
+    terms = _query_terms(query)
+    if not terms:
+        return False
+    text = _normalized_search(str(item.get("search_text") or item.get("attribution", "")))
+    return terms[0][:5] in text
 
 
 def candidates(query: str) -> list[dict]:
@@ -329,7 +345,7 @@ def candidates(query: str) -> list[dict]:
     ranked = []
     for item in found:
         score = _relevance(clean, item)
-        if score == 0:
+        if score == 0 or not _subject_matches(clean, item):
             continue
         item["relevance"] = score
         ranked.append(item)
