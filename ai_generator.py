@@ -81,6 +81,35 @@ def _normalized_title(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
 
 
+_VISUAL_STOP_WORDS = {
+    "aerial", "animation", "camera", "cinematic", "close", "footage", "framing",
+    "historic", "macro", "motion", "scientific", "setting", "shot", "slow",
+    "technology", "video", "view", "wide",
+}
+
+
+def _visual_terms(value: str) -> set[str]:
+    return {
+        token[:5] for token in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(token) >= 4 and token not in _VISUAL_STOP_WORDS
+    }
+
+
+def _validate_visual_alignment(script: str, visual_queries: list) -> None:
+    """Require each search query to name a subject in its spoken rank."""
+    marker = re.compile(r"(?:#\s*|number\s+)([321])\s*:?", re.IGNORECASE)
+    matches = list(marker.finditer(script))
+    sections: dict[int, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(script)
+        sections[int(match.group(1))] = script[match.end():end]
+    for query, rank in zip(visual_queries, (3, 2, 1)):
+        query_terms = _visual_terms(str(query))
+        spoken_terms = _visual_terms(sections.get(rank, ""))
+        if not query_terms or not query_terms.intersection(spoken_terms):
+            raise ValueError(f"visual query for rank {rank} does not name its spoken subject")
+
+
 def validate_package(data: dict) -> dict:
     if not isinstance(data, dict):
         raise ValueError("script package is not an object")
@@ -109,6 +138,7 @@ def validate_package(data: dict) -> dict:
         or any(len(str(query).split()) < 4 for query in visual_queries)
     ):
         raise ValueError("three concrete visual queries are required")
+    _validate_visual_alignment(script, visual_queries)
     if not 4 <= len(overlay.split()) <= 7 or not 1 <= len(accent.split()) <= 3:
         raise ValueError("hook packaging is invalid")
     return {

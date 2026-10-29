@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from ai_generator import configured_provider_count, generate_package
 from channel_config import CHANNEL_DESCRIPTION, CHANNEL_HANDLE, CHANNEL_NAME, CHANNEL_TAGLINE, TTS_PITCH, TTS_RATE, TTS_VOICE
-from media_sources import candidates, download
+from media_sources import candidates, download, quality_label
 from prompt_reserve import RESERVE_PATH, consume, release, reserve, seed, stats
 from youtube_upload import upload_to_youtube
 
@@ -228,7 +228,7 @@ async def _edge_voice(text: str, output: pathlib.Path) -> list[dict]:
 def generate_voice(text: str, output: pathlib.Path) -> tuple[pathlib.Path, list[dict]]:
     try:
         timings = asyncio.run(_edge_voice(text, output))
-        print(f"[VOICE] {TTS_VOICE}: {len(timings)} sentence-locked word timings")
+        print(f"[VOICE] {TTS_VOICE}: {len(timings)} narration-locked word timings")
         return output, timings
     except Exception as error:
         if os.getenv("DEEPGRAM_API_KEY", "").strip():
@@ -240,15 +240,46 @@ def generate_voice(text: str, output: pathlib.Path) -> tuple[pathlib.Path, list[
 def _visual_has_detail(path: pathlib.Path) -> bool:
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
-        "-vf", "scale=64:64,signalstats,metadata=print:file=-", "-frames:v", "4", "-f", "null", "-",
+        "-vf", "scale=64:64:force_original_aspect_ratio=increase,crop=64:64,format=gray",
+        "-frames:v", "4", "-f", "rawvideo", "-",
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=45)
+    result = subprocess.run(command, capture_output=True, timeout=45)
     if result.returncode != 0:
         return False
-    values = [float(value) for value in re.findall(r"lavfi\.signalstats\.(?:YHIGH|YLOW)=([0-9.]+)", result.stdout)]
-    highs = [float(value) for value in re.findall(r"lavfi\.signalstats\.YHIGH=([0-9.]+)", result.stdout)]
-    lows = [float(value) for value in re.findall(r"lavfi\.signalstats\.YLOW=([0-9.]+)", result.stdout)]
-    return bool(values and highs and lows and max(highs) - min(lows) >= 18 and max(highs) >= 25)
+    frame_size = 64 * 64
+    frames = [result.stdout[index:index + frame_size] for index in range(0, len(result.stdout), frame_size)]
+    for frame in frames:
+        if len(frame) != frame_size:
+            continue
+        dynamic_range = max(frame) - min(frame)
+        horizontal = sum(
+            abs(frame[row * 64 + column] - frame[row * 64 + column - 1])
+            for row in range(64) for column in range(1, 64)
+        )
+        vertical = sum(
+            abs(frame[row * 64 + column] - frame[(row - 1) * 64 + column])
+            for row in range(1, 64) for column in range(64)
+        )
+        edge_energy = (horizontal + vertical) / (2 * 64 * 63)
+        if dynamic_range >= 24 and edge_energy >= 2.5:
+            return True
+    return False
+
+
+def _visual_resolution(path: pathlib.Path) -> tuple[int, int]:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return 0, 0
+    streams = json.loads(result.stdout or "{}").get("streams", [])
+    if not streams:
+        return 0, 0
+    return int(streams[0].get("width") or 0), int(streams[0].get("height") or 0)
 
 
 def _make_segment(source: pathlib.Path, kind: str, seconds: float, output: pathlib.Path) -> None:
@@ -272,19 +303,28 @@ def build_visuals(queries: list[str], beat_durations: list[float], token: str) -
             source = None
             try:
                 source = download(item, WORK_DIR)
+                width, height = _visual_resolution(source)
+                quality = quality_label(width, height)
+                if quality is None:
+                    raise ValueError(f"source resolution {width}x{height} is below the 720p floor")
                 if not _visual_has_detail(source):
                     raise ValueError("visual is blank, flat, or unreadable")
                 segment = WORK_DIR / f"segment_{token}_{index}.mp4"
                 _make_segment(source, item["kind"], beat, segment)
-                if not _visual_has_detail(segment):
-                    raise ValueError("normalized visual failed quality guard")
+                item = {**item, "width": width, "height": height, "quality": quality}
                 selected.append(item)
                 segments.append(segment)
                 accepted = True
-                print(f"  selected {item['source']}:{item['id']} ({item['kind']})")
+                print(
+                    f"  selected {item['source']}:{item['id']} ({item['kind']}, "
+                    f"{quality} source {width}x{height})"
+                )
                 break
             except Exception as error:
-                print(f"  rejected {item['source']}:{item['id']} ({type(error).__name__})")
+                response = getattr(error, "response", None)
+                status = getattr(response, "status_code", None)
+                reason = str(error) if isinstance(error, ValueError) else f"HTTP {status}" if status else type(error).__name__
+                print(f"  rejected {item['source']}:{item['id']} ({reason})")
             finally:
                 if source and source.exists():
                     source.unlink(missing_ok=True)

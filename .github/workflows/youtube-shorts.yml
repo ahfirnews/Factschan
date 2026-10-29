@@ -11,6 +11,12 @@ on:
         default: '1'
         type: choice
         options: ['1', '2', '3']
+      upload_to_youtube:
+        description: Upload after validation (leave false for a safe preview)
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
 
 concurrency:
   group: fact-voltage-publisher
@@ -25,7 +31,7 @@ jobs:
     timeout-minutes: 55
     env:
       NUM_VIDEOS: ${{ inputs.num_videos || '1' }}
-      UPLOAD_TO_YOUTUBE: 'true'
+      UPLOAD_TO_YOUTUBE: ${{ github.event_name == 'schedule' || inputs.upload_to_youtube == 'true' }}
       YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}

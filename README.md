@@ -37,11 +37,18 @@ for last. Subscribe for fast facts, clear sources, and zero dead air.
 - Titles, scripts, and visual IDs are retained permanently in `shorts_db.db`.
 - Three script-matched visual beats come from Pexels, Pixabay, Wikimedia
   Commons, NASA, Openverse, and the Art Institute of Chicago.
-- Blank/flat visual detection fails the build instead of publishing a black or
-  colored-placeholder video.
-- Edge neural narration provides exact word timings for synced captions; the
-  configured Deepgram route remains a fallback.
+- Every visual query must name the corresponding spoken subject. Catalog-title
+  relevance checks reject unrelated results before download.
+- Sources are ranked 4K, then 1080p, then 720p. FFprobe rejects anything below
+  the 720p floor before it can be enlarged into a blurry 1080x1920 Short.
+- Spatial-detail detection fails the build instead of publishing a black,
+  solid-color, flat, or placeholder video.
+- Edge neural narration provides exact word boundaries for short, high-contrast
+  two-line captions. The currently spoken word turns yellow; key figures remain
+  cyan. The configured Deepgram route remains a fallback.
 - GitHub Actions publishes once every 12 hours with concurrency protection.
+- Manual workflow runs default to safe preview mode; uploading must be selected
+  explicitly. Scheduled runs continue to upload automatically.
 
 No provider can promise a permanent free tier. Runtime model discovery,
 independent failover routes, daily catalog checks, and the offline reserve make

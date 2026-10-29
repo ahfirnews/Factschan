@@ -84,6 +84,41 @@ def _tag_highlights(line: str) -> str:
     )
 
 
+def _caption_phrases(words: list[str], max_words: int = 6, max_chars: int = 34) -> list[tuple[int, int]]:
+    """Split captions into short, readable ranges of word indexes."""
+    phrases: list[tuple[int, int]] = []
+    start = 0
+    while start < len(words):
+        end = start
+        length = 0
+        while end < len(words):
+            candidate = length + len(words[end]) + (1 if end > start else 0)
+            if end > start and (end - start >= max_words or candidate > max_chars):
+                break
+            length = candidate
+            end += 1
+            if end - start >= 3 and re.search(r"[.!?]$", words[end - 1]):
+                break
+        phrases.append((start, max(start + 1, end)))
+        start = max(start + 1, end)
+    return phrases
+
+
+def _balanced_caption_lines(words: list[str]) -> list[list[str]]:
+    """Balance a short phrase across at most two centered lines."""
+    if len(" ".join(words)) <= 18 or len(words) < 3:
+        return [words]
+    split = min(
+        range(1, len(words)),
+        key=lambda index: abs(len(" ".join(words[:index])) - len(" ".join(words[index:]))),
+    )
+    return [words[:split], words[split:]]
+
+
+def _ass_escape(text: str) -> str:
+    return text.replace("\\", "/").replace("{", "(").replace("}", ")")
+
+
 def add_captions(
     video_path: pathlib.Path,
     audio_path: pathlib.Path,
@@ -91,28 +126,37 @@ def add_captions(
     word_timings: list[dict],
     output_path: pathlib.Path,
 ) -> None:
-    """Burn high-contrast captions using the narration's exact word timings."""
+    """Burn phrase captions with an exact active-word highlight."""
     video_duration = get_duration(video_path)
-    blocks = [lines[index:index + 2] for index in range(0, len(lines), 2)]
-    timings: list[tuple[float, float]] = []
-    word_index = 0
-    for block in blocks:
-        clean_text = " ".join(re.sub(r"⟦[^⟧]*⟧", "", line) for line in block)
-        count = len(re.sub(r"[.,!?]", "", clean_text).split())
-        if word_index >= len(word_timings):
-            if timings:
-                timings[-1] = (timings[-1][0], video_duration)
-            break
-        end_index = min(word_index + count - 1, len(word_timings) - 1)
-        timings.append((float(word_timings[word_index]["start"]), float(word_timings[end_index]["end"])))
-        word_index += count
-    if timings:
-        timings[-1] = (timings[-1][0], min(timings[-1][1], video_duration))
+    source_text = " ".join(re.sub(r"⟦[^⟧]*⟧", "", line) for line in lines)
+    source_words = source_text.split()
+    timing_words = [
+        str(item.get("punctuated_word") or item.get("word") or "").strip()
+        for item in word_timings
+    ]
+    display_words = source_words if len(source_words) == len(word_timings) else timing_words
+    count = min(len(display_words), len(word_timings))
+    if count == 0:
+        raise RuntimeError("No word timings are available for captions")
+    display_words = display_words[:count]
+    word_timings = word_timings[:count]
+    phrases = _caption_phrases(display_words)
 
-    def ass_text(line: str) -> str:
-        return line.replace("⟦HIGHLIGHT⟧", r"{\c&H00E6FF&}").replace(
-            "⟦/HIGHLIGHT⟧", r"{\c&H00FFFFFF&}"
-        )
+    def styled_word(word: str, active: bool) -> str:
+        clean = _ass_escape(word)
+        if active:
+            return rf"{{\c&H0000E6FF&\bord8}}{clean}{{\c&H00FFFFFF&\bord7}}"
+        if _HIGHLIGHT_PATTERNS.search(word):
+            return rf"{{\c&H00FFE500&}}{clean}{{\c&H00FFFFFF&}}"
+        return clean
+
+    def phrase_text(start: int, end: int, active: int) -> str:
+        rendered = [styled_word(display_words[index], index == active) for index in range(start, end)]
+        raw_lines = _balanced_caption_lines(display_words[start:end])
+        first_length = len(raw_lines[0])
+        if len(raw_lines) == 1:
+            return " ".join(rendered)
+        return " ".join(rendered[:first_length]) + r"\N" + " ".join(rendered[first_length:])
 
     def ass_time(seconds: float) -> str:
         hours = int(seconds // 3600)
@@ -124,20 +168,45 @@ ScriptType: v4.00+
 PlayResX: {NORM_WIDTH}
 PlayResY: {NORM_HEIGHT}
 ScaledBorderAndShadow: yes
+WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Montserrat-Bold,68,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,2,2,40,40,160,1
+Style: Caption,Montserrat-Bold,76,&H00FFFFFF,&H0000E6FF,&H00000000,&H68000000,1,0,0,0,100,100,0.5,0,1,7,3,2,55,55,220,1
+Style: Hook,Montserrat-Bold,84,&H00FFFFFF,&H0000E6FF,&H00000000,&H68000000,1,0,0,0,100,100,0.5,0,1,8,3,2,55,55,260,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ass_path = WORK_DIR / f"captions_{output_path.stem}.ass"
+    event_count = 0
     with ass_path.open("w", encoding="utf-8") as handle:
         handle.write(header)
-        for block, (start, end) in zip(blocks, timings):
-            text = r"\N".join(ass_text(line) for line in block)
-            handle.write(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Default,,0,0,0,,{text}\n")
+        for phrase_number, (phrase_start, phrase_end) in enumerate(phrases):
+            style = "Hook" if phrase_number == 0 else "Caption"
+            for active in range(phrase_start, phrase_end):
+                start = max(0.0, float(word_timings[active]["start"]))
+                word_end = max(start + 0.03, float(word_timings[active]["end"]))
+                if active + 1 < count:
+                    # ASS renders two events at a shared timestamp on the same
+                    # frame. Leave one centisecond between events so their
+                    # outlines cannot collide and hide parts of the phrase.
+                    next_start = float(word_timings[active + 1]["start"])
+                    end = max(start + 0.01, next_start - 0.011)
+                else:
+                    end = word_end
+                end = min(video_duration, end)
+                if end <= start:
+                    continue
+                text = phrase_text(phrase_start, phrase_end, active)
+                handle.write(
+                    f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{text}\n"
+                )
+                event_count += 1
+    print(
+        f"[CAPTIONS] {count} exact word timings → {len(phrases)} short phrases "
+        f"({event_count} active-word events)"
+    )
     escaped_ass = str(ass_path.resolve()).replace("\\", "/").replace(":", "\\:")
     try:
         _ff(

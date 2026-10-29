@@ -20,6 +20,31 @@ GENERIC_QUERY_WORDS = {
     "motion", "scientific", "setting", "shot", "slow", "technology", "video", "view",
 }
 
+QUALITY_PRIORITY = {"4K": 0, "1080p": 1, "720p": 2}
+
+
+def quality_label(width: object, height: object) -> str | None:
+    """Map a source resolution to an accepted delivery tier."""
+    try:
+        short, long = sorted((int(width), int(height)))
+    except (TypeError, ValueError):
+        return None
+    if short >= 2160 and long >= 3840:
+        return "4K"
+    if short >= 1080 and long >= 1920:
+        return "1080p"
+    if short >= 720 and long >= 1280:
+        return "720p"
+    return None
+
+
+def _quality_key(item: dict) -> tuple[int, float, int]:
+    width = int(item.get("width") or 0)
+    height = int(item.get("height") or 0)
+    label = quality_label(width, height)
+    aspect_distance = abs((width / max(height, 1)) - 0.5625) if width and height else 2.0
+    return QUALITY_PRIORITY.get(label or "", 3), aspect_distance, -(width * height)
+
 
 def _clean_query(query: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", query)
@@ -33,20 +58,22 @@ def _pexels(query: str) -> list[dict]:
     response = SESSION.get(
         "https://api.pexels.com/videos/search",
         headers={"Authorization": key},
-        params={"query": query, "per_page": 15, "orientation": "portrait", "size": "medium"},
+        params={"query": query, "per_page": 15, "orientation": "portrait", "size": "large"},
         timeout=(8, 12),
     )
     response.raise_for_status()
     output = []
     for video in response.json().get("videos", []):
-        files = sorted(
-            [item for item in video.get("video_files", []) if item.get("link") and item.get("width")],
-            key=lambda item: abs((item.get("width", 0) / max(item.get("height", 1), 1)) - 0.5625),
-        )
+        files = sorted([
+            item for item in video.get("video_files", [])
+            if item.get("link") and quality_label(item.get("width"), item.get("height"))
+        ], key=_quality_key)
         if files:
             output.append({
                 "source": "Pexels", "id": str(video["id"]), "kind": "video", "url": files[0]["link"],
                 "width": files[0].get("width"), "height": files[0].get("height"),
+                "quality": quality_label(files[0].get("width"), files[0].get("height")),
+                "search_text": video.get("url", ""),
                 "attribution": f"Pexels video by {video.get('user', {}).get('name', 'contributor')}",
                 "license": "Pexels License",
             })
@@ -66,11 +93,17 @@ def _pixabay(query: str) -> list[dict]:
     output = []
     for video in response.json().get("hits", []):
         variants = video.get("videos", {})
-        variant = variants.get("medium") or variants.get("small") or variants.get("large")
+        accepted = [
+            variant for variant in variants.values()
+            if variant and variant.get("url") and quality_label(variant.get("width"), variant.get("height"))
+        ]
+        variant = sorted(accepted, key=_quality_key)[0] if accepted else None
         if variant and variant.get("url"):
             output.append({
                 "source": "Pixabay", "id": str(video["id"]), "kind": "video", "url": variant["url"],
                 "width": variant.get("width"), "height": variant.get("height"),
+                "quality": quality_label(variant.get("width"), variant.get("height")),
+                "search_text": video.get("tags", ""),
                 "attribution": f"Pixabay video by {video.get('user', 'contributor')}",
                 "license": "Pixabay Content License",
             })
@@ -85,7 +118,7 @@ def _wikimedia(query: str) -> list[dict]:
             params={
                 "action": "query", "format": "json", "generator": "search",
                 "gsrsearch": f"{value} filetype:video", "gsrnamespace": 6, "gsrlimit": 12,
-                "prop": "videoinfo", "viprop": "url|mime|extmetadata|derivatives",
+                "prop": "videoinfo", "viprop": "url|mime|extmetadata|derivatives|size",
             },
             timeout=(8, 25),
         )
@@ -101,10 +134,15 @@ def _wikimedia(query: str) -> list[dict]:
         mime = info.get("mime", "")
         derivatives = [
             item for item in info.get("derivatives", [])
-            if item.get("src") and "video/webm" in item.get("type", "") and item.get("height", 0) <= 720
+            if item.get("src") and item.get("type", "").startswith("video/")
+            and quality_label(item.get("width"), item.get("height"))
         ]
-        derivatives.sort(key=lambda item: item.get("height", 0), reverse=True)
-        url = derivatives[0]["src"] if derivatives else info.get("url", "")
+        derivatives.sort(key=_quality_key)
+        original = {
+            "src": info.get("url", ""), "width": info.get("width"), "height": info.get("height")
+        }
+        chosen = derivatives[0] if derivatives else original
+        url = chosen.get("src", "")
         if not url or mime not in {"video/webm", "video/ogg", "video/mp4", "application/ogg"}:
             continue
         meta = info.get("extmetadata", {})
@@ -112,8 +150,8 @@ def _wikimedia(query: str) -> list[dict]:
         license_name = meta.get("LicenseShortName", {}).get("value", "Wikimedia Commons license")
         output.append({
             "source": "Wikimedia Commons", "id": str(page.get("pageid")), "kind": "video", "url": url,
-            "width": derivatives[0].get("width") if derivatives else info.get("width"),
-            "height": derivatives[0].get("height") if derivatives else info.get("height"),
+            "width": chosen.get("width"), "height": chosen.get("height"),
+            "quality": quality_label(chosen.get("width"), chosen.get("height")),
             "attribution": f"{page.get('title', 'Wikimedia video')} — {artist}", "license": license_name,
             "search_text": page.get("title", ""),
         })
@@ -130,7 +168,7 @@ def _wikimedia_images(query: str) -> list[dict]:
             params={
                 "action": "query", "format": "json", "generator": "search",
                 "gsrsearch": f"{value} filetype:bitmap", "gsrnamespace": 6, "gsrlimit": 20,
-                "prop": "imageinfo", "iiprop": "url|mime|extmetadata|size", "iiurlwidth": 1600,
+                "prop": "imageinfo", "iiprop": "url|mime|extmetadata|size", "iiurlwidth": 3840,
             },
             timeout=(8, 25),
         )
@@ -155,6 +193,9 @@ def _wikimedia_images(query: str) -> list[dict]:
             "source": "Wikimedia Commons", "id": str(page.get("pageid")), "kind": "image", "url": url,
             "width": info.get("thumbwidth") or info.get("width"),
             "height": info.get("thumbheight") or info.get("height"),
+            "quality": quality_label(
+                info.get("thumbwidth") or info.get("width"), info.get("thumbheight") or info.get("height")
+            ),
             "attribution": f"{page.get('title', 'Wikimedia image')} — {artist}", "license": license_name,
             "search_text": page.get("title", ""),
         })
@@ -187,9 +228,14 @@ def _nasa(query: str) -> list[dict]:
             try:
                 assets = SESSION.get(f"https://images-api.nasa.gov/asset/{quote(nasa_id)}", timeout=(8, 20)).json()
                 urls = [entry.get("href", "") for entry in assets.get("collection", {}).get("items", [])]
-                mp4s = [url for url in urls if re.search(r"~(?:small|medium)\.mp4$", url, re.I)]
-                if not mp4s:
-                    mp4s = [url for url in urls if url.lower().endswith(".mp4")]
+                mp4s = [url for url in urls if url.lower().endswith(".mp4")]
+                mp4s.sort(key=lambda url: (
+                    0 if re.search(r"~(?:orig|original)\.mp4$", url, re.I) else
+                    1 if re.search(r"~large\.mp4$", url, re.I) else
+                    2 if re.search(r"~medium\.mp4$", url, re.I) else
+                    3 if re.search(r"~small\.mp4$", url, re.I) else 2,
+                    len(url),
+                ))
                 if mp4s:
                     output.append({
                         "source": "NASA", "id": nasa_id, "kind": "video", "url": mp4s[0],
@@ -205,7 +251,7 @@ def _openverse(query: str) -> list[dict]:
     response = SESSION.get(
         "https://api.openverse.org/v1/images/",
         params={"q": query, "page_size": 20, "mature": "false", "license_type": "commercial"},
-        timeout=(8, 12),
+        timeout=(8, 30),
     )
     response.raise_for_status()
     output = []
@@ -215,6 +261,7 @@ def _openverse(query: str) -> list[dict]:
             output.append({
                 "source": "Openverse", "id": str(item.get("id")), "kind": "image", "url": url,
                 "width": item.get("width"), "height": item.get("height"),
+                "quality": quality_label(item.get("width"), item.get("height")),
                 "attribution": f"{item.get('title') or 'Openverse image'} — {item.get('creator') or 'unknown creator'}",
                 "license": str(item.get("license") or "Creative Commons").upper(),
                 "search_text": item.get("title") or "",
@@ -241,7 +288,7 @@ def _art_institute(query: str) -> list[dict]:
         if item.get("is_public_domain") and item.get("image_id"):
             output.append({
                 "source": "Art Institute of Chicago", "id": str(item["id"]), "kind": "image",
-                "url": f"https://www.artic.edu/iiif/2/{item['image_id']}/full/843,/0/default.jpg",
+                "url": f"https://www.artic.edu/iiif/2/{item['image_id']}/full/2160,/0/default.jpg",
                 "attribution": f"{item.get('title', 'Artwork')} — {item.get('artist_display', 'unknown artist')}",
                 "license": "CC0 Public Domain",
                 "search_text": item.get("title", ""),
@@ -253,9 +300,15 @@ SEARCHERS = (_pexels, _pixabay, _wikimedia, _nasa, _openverse, _wikimedia_images
 
 
 def _relevance(query: str, item: dict) -> int:
-    text = re.sub(r"[^a-z0-9]+", " ", str(item.get("search_text") or item.get("attribution", "")).casefold())
+    aliases = {"fibre": "fiber", "colour": "color"}
+
+    def normalized(value: str) -> str:
+        tokens = re.findall(r"[a-z0-9]+", value.casefold())
+        return " ".join(aliases.get(token, token) for token in tokens)
+
+    text = normalized(str(item.get("search_text") or item.get("attribution", "")))
     terms = [
-        term for term in re.findall(r"[a-z0-9]+", query.casefold())
+        term for term in normalized(query).split()
         if len(term) >= 4 and term not in GENERIC_QUERY_WORDS
     ]
     return sum(1 for term in terms[:5] if term[:5] in text)
@@ -276,7 +329,7 @@ def candidates(query: str) -> list[dict]:
     ranked = []
     for item in found:
         score = _relevance(clean, item)
-        if item["source"] not in {"Pexels", "Pixabay"} and score == 0:
+        if score == 0:
             continue
         item["relevance"] = score
         ranked.append(item)
@@ -285,9 +338,7 @@ def candidates(query: str) -> list[dict]:
         key=lambda item: (
             0 if item["kind"] == "video" else 1,
             -item["relevance"],
-            abs(
-                (float(item.get("width") or 0) / max(float(item.get("height") or 0), 1.0)) - 0.5625
-            ) if item.get("width") and item.get("height") else 2.0,
+            _quality_key(item),
             priority.get(item["source"], 9),
         ),
     )
