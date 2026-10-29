@@ -370,11 +370,41 @@ def catalog_health() -> dict[str, str]:
             result[name] = f"ok ({len(models)} candidates)" if models else "catalog empty"
         except Exception as error:
             result[name] = f"error ({type(error).__name__})"
-    for name, key_name in (
-        ("OpenRouter Free", "OPENROUTER_API_KEY"),
-        ("Hugging Face Router", "HF_TOKEN"),
-        ("Gemini", "GEMINI_API_KEY"),
-        ("Claude", "ANTHROPIC_API_KEY"),
-    ):
-        result[name] = "configured" if _env(key_name) else "not configured"
+    checks = (
+        ("OpenRouter Free", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/models", "bearer"),
+        ("Hugging Face Router", "HF_TOKEN", "https://huggingface.co/api/models?pipeline_tag=text-generation&inference=warm&limit=5", "bearer"),
+        ("Gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", "google"),
+        ("Claude", "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/models?limit=1000", "anthropic"),
+    )
+    for name, key_name, url, auth_type in checks:
+        key = _env(key_name)
+        if name == "Claude" and not key:
+            key = _env("CLAUDE_API_KEY")
+        if not key:
+            result[name] = "not configured"
+            continue
+        headers: dict[str, str] = {}
+        params: dict[str, str] = {}
+        if auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {key}"
+        elif auth_type == "google":
+            params["key"] = key
+        else:
+            headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=(8, 20))
+            response.raise_for_status()
+            payload = response.json()
+            if name == "Gemini":
+                count = sum(
+                    "generateContent" in item.get("supportedGenerationMethods", [])
+                    for item in payload.get("models", [])
+                )
+            elif isinstance(payload, list):
+                count = len(payload)
+            else:
+                count = len(payload.get("data", []))
+            result[name] = f"ok ({count} candidates)" if count else "catalog empty"
+        except Exception as error:
+            result[name] = f"error ({type(error).__name__})"
     return result
