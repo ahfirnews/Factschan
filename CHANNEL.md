@@ -2,7 +2,7 @@
 
 Name: **Fact Voltage**
 
-Handle: **@FactVoltage**
+Handle: **@FactVoltageDaily**
 
 Tagline: **Fast Facts. High Voltage.**
 

@@ -10,7 +10,7 @@ eight provider routes, and falls back to a transactional SQLite reserve with
 ## Channel identity
 
 - YouTube name: **Fact Voltage**
-- Requested handle: **@FactVoltage**
+- YouTube handle: **@FactVoltageDaily**
 - Logo: [`assets/branding/logo.png`](assets/branding/logo.png)
 - Banner: [`assets/branding/banner.jpg`](assets/branding/banner.jpg)
 

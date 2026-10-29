@@ -1,7 +1,7 @@
 """Public channel identity and publishing defaults."""
 
 CHANNEL_NAME = "Fact Voltage"
-CHANNEL_HANDLE = "@FactVoltage"
+CHANNEL_HANDLE = "@FactVoltageDaily"
 CHANNEL_TAGLINE = "Fast Facts. High Voltage."
 CHANNEL_DESCRIPTION = (
     "Facts should hit harder than filler. Fact Voltage ranks the world's wildest "
