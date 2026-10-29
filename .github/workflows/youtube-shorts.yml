@@ -14,7 +14,7 @@ on:
       upload_to_youtube:
         description: Upload after validation (leave false for a safe preview)
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options: ['false', 'true']
 
