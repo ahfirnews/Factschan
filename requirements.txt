@@ -1,17 +1,7 @@
-# Core dependencies
-google-generativeai
-edge-tts
-requests
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
-imageio[ffmpeg]
-elevenlabs
-deepgram-sdk
-
-# Optional: ElevenLabs
-# (No extra package needed - uses requests)
-
-# Video processing (requires ffmpeg installed separately)
-# ffmpeg must be installed on your system
+# Runtime dependencies. FFmpeg is installed separately by GitHub Actions.
+edge-tts>=7.2,<8
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+google-auth>=2.40,<3
+google-auth-oauthlib>=1.2,<2
+google-api-python-client>=2.180,<3

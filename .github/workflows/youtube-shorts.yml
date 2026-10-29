@@ -1,97 +1,79 @@
-name: YouTube Shorts Generator & Uploader
+name: Fact Voltage generator and uploader
 
 on:
   schedule:
-    - cron: '0 */8 * * *'
+    - cron: '0 */12 * * *'
   workflow_dispatch:
     inputs:
       num_videos:
-        description: 'Number of videos to generate'
+        description: Number of unique videos to generate and upload
         required: false
         default: '1'
         type: choice
-        options:
-          - '1'
-          - '2'
-          - '3'
-          - '5'
-          - '10'
+        options: ['1', '2', '3']
 
-env:
-  NUM_VIDEOS: ${{ github.event.inputs.num_videos || '1' }}
-  UPLOAD_TO_YOUTUBE: 'true'
+concurrency:
+  group: fact-voltage-publisher
+  cancel-in-progress: false
 
-# Required for the "Commit database" step to push back to the repo
 permissions:
   contents: write
 
 jobs:
-  generate-and-upload:
+  publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      NUM_VIDEOS: ${{ inputs.num_videos || '1' }}
+      UPLOAD_TO_YOUTUBE: 'true'
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+      FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+      JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install FFmpeg
+          cache: pip
+      - name: Install FFmpeg and Python dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Install Python dependencies
-        run: |
+          sudo apt-get install -y ffmpeg fonts-montserrat
           python -m pip install --upgrade pip
-          pip install requests python-dotenv google-api-python-client google-auth-oauthlib gtts
-
-
-      - name: Create output directories
-        run: mkdir -p output audio music
-
-      - name: Generate and upload YouTube Shorts
-        env:
-          YT_CLIENT_ID:      ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET:  ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN:  ${{ secrets.YT_REFRESH_TOKEN }}
-          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
-          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
-          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
-          DEEPGRAM_API_KEY:  ${{ secrets.DEEPGRAM_API_KEY }}
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-        run: python yt.py
-
-      - name: Upload generated videos as artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-shorts-${{ github.run_number }}
-          path: output/*.mp4
-          retention-days: 7
-
-      - name: Upload database as artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: database-${{ github.run_number }}
-          path: shorts_db.db
-          retention-days: 30
-
-      # Saves used-content database back to repo so duplicates are tracked
-      # across runs. No secrets needed — uses built-in GITHUB_TOKEN.
-      - name: Commit database to repository
+          pip install -r requirements.txt
+      - name: Generate, validate, and upload
+        run: python fact_voltage.py
+      - name: Save unique-content state
         if: success()
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add shorts_db.db
-          git diff --staged --quiet || git commit -m "chore: update shorts database [skip ci]"
-          git push
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add shorts_db.db fact_voltage_prompt_reserve.sqlite3
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: record published Fact Voltage episode [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Keep validated output for debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fact-voltage-${{ github.run_number }}
+          path: output/*.mp4
+          if-no-files-found: ignore
+          retention-days: 3
